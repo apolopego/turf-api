@@ -56,6 +56,97 @@ def reach_and_freq(X, indices):
 # ---------- TURF Greedy (Optimal OR Forced) ----------
 def greedy_sequence(X, selected_skus, forced_start=None):
     """
+    TURF path with:
+    - reach
+    - delta reach
+    - frequency
+    - delta frequency
+    Continues even if delta reach = 0.
+    """
+    selected_indices = [sku_to_idx[s] for s in selected_skus]
+    seq = []
+    remaining = selected_indices.copy()
+    results = []
+
+    prev_reach = 0
+    prev_freq = 0
+
+    # STEP 1
+    if forced_start is None:
+        best_idx = None
+        best_reach = -1
+        best_freq = -1
+
+        for idx in remaining:
+            r, f = reach_and_freq(X, [idx])
+            if r > best_reach:
+                best_reach = r
+                best_freq = f
+                best_idx = idx
+    else:
+        best_idx = sku_to_idx[forced_start]
+        best_reach, best_freq = reach_and_freq(X, [best_idx])
+
+    seq.append(best_idx)
+    remaining.remove(best_idx)
+
+    results.append({
+        "step": 1,
+        "sku_added": sku_columns[best_idx],
+        "combination": sku_columns[best_idx],
+        "reach_pct": best_reach,
+        "delta_reach": best_reach - prev_reach,
+        "freq": best_freq,
+        "delta_freq": best_freq - prev_freq
+    })
+
+    prev_reach = best_reach
+    prev_freq = best_freq
+
+    # STEP 2+
+    step = 2
+    while remaining:
+        best_idx = None
+        best_reach = -1
+        best_freq = -1
+        best_inc = -999  # allow zero or negative increments
+
+        for idx in remaining:
+            r, f = reach_and_freq(X, seq + [idx])
+            inc = r - prev_reach
+
+            # PRIORIDAD:
+            # 1) mayor delta alcance
+            # 2) si delta = 0 → mayor frecuencia
+            if inc > best_inc or (inc == best_inc and f > best_freq):
+                best_inc = inc
+                best_idx = idx
+                best_reach = r
+                best_freq = f
+
+        # siempre agrega un SKU, aunque inc sea 0
+        seq.append(best_idx)
+        remaining.remove(best_idx)
+
+        combo_names = [sku_columns[i] for i in seq]
+
+        results.append({
+            "step": step,
+            "sku_added": sku_columns[best_idx],
+            "combination": " + ".join(combo_names),
+            "reach_pct": best_reach,
+            "delta_reach": best_reach - prev_reach,
+            "freq": best_freq,
+            "delta_freq": best_freq - prev_freq
+        })
+
+        prev_reach = best_reach
+        prev_freq = best_freq
+        step += 1
+
+    return results
+
+    """
     Returns full TURF path:
     step, sku_added, combination, reach_pct, delta_reach, freq, delta_freq
     """

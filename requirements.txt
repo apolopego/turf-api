@@ -1,0 +1,14 @@
+fastapi==0.115.2
+uvicorn==0.30.1
+pandas==2.2.2
+openpyxl==3.1.2
+
+# Si usas Django en este mismo entorno:
+Django==5.0.2
+djangorestframework==3.15.1
+
+# Autenticación JWT (solo si usas DRF + JWT)
+djangorestframework-simplejwt==5.3.1
+
+# CORS si lo necesitas
+django-cors-headers==4.3.1

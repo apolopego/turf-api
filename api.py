@@ -1,68 +1,55 @@
 # ======================================================
-# TURF API with FastAPI
-# Includes:
-# - Reach
-# - Delta Reach
-# - Frequency
-# - Delta Frequency
-# For both: Optimal and Forced paths
+# TURF API with FastAPI (FINAL VERSION)
+# - Dynamic project (sheet)
+# - Dynamic SKUs (SKU_1 ... SKU_n)
+# - Dynamic filters
+# - "ALL" disables the filter
+# - Reach + DeltaReach + Frequency + DeltaFrequency
 # ======================================================
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 
-# ---------- Load base data ----------
+# -----------------------------
+# Load Excel only once
+# -----------------------------
 data_file = "data_turf.xlsx"
-sheet_name = "Turf"
 
-df = pd.read_excel(data_file, sheet_name=sheet_name)
+app = FastAPI()
 
-sku_columns = [
-    "SKU_1","SKU_2","SKU_3","SKU_4","SKU_5",
-    "SKU_6","SKU_7","SKU_8","SKU_9","SKU_10",
-    "SKU_11","SKU_12","SKU_13","SKU_14","SKU_15",
-    "SKU_16","SKU_17","SKU_18","SKU_19","SKU_20"
-]
+# CORS for Excel / browsers
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-X = df[sku_columns].values
-sku_to_idx = {s: i for i, s in enumerate(sku_columns)}
-total_people = X.shape[0]
-
-
-# ---------- TURF CORE: Reach + Frequency ----------
+# =====================================================
+# TURF METRICS
+# =====================================================
 def reach_and_freq(X, indices):
-    """
-    Compute:
-    - Reach %
-    - Frequency for REACHED people
-    """
+    """Returns reach_pct, frequency among reached."""
     subset = X[:, indices]
-    hits_per_person = subset.sum(axis=1)
+    hits = subset.sum(axis=1)
 
-    reach_mask = hits_per_person > 0
-    reach = reach_mask.sum()
+    reach_mask = hits > 0
+    n_reach = reach_mask.sum()
+    total = X.shape[0]
 
-    reach_pct = reach / total_people if total_people > 0 else 0
+    reach_pct = n_reach / total if total > 0 else 0
 
-    if reach > 0:
-        freq = hits_per_person[reach_mask].sum() / reach
+    if n_reach > 0:
+        freq = hits[reach_mask].sum() / n_reach
     else:
         freq = 0
 
     return reach_pct, freq
 
 
-# ---------- TURF Greedy (Optimal OR Forced) ----------
-def greedy_sequence(X, selected_skus, forced_start=None):
-    """
-    TURF path with:
-    - reach
-    - delta reach
-    - frequency
-    - delta frequency
-    Continues even if delta reach = 0.
-    """
+def greedy_sequence(X, sku_columns, selected_skus, sku_to_idx, forced_start=None):
+    """Optimal or forced TURF sequence."""
     selected_indices = [sku_to_idx[s] for s in selected_skus]
     seq = []
     remaining = selected_indices.copy()
@@ -83,93 +70,7 @@ def greedy_sequence(X, selected_skus, forced_start=None):
                 best_reach = r
                 best_freq = f
                 best_idx = idx
-    else:
-        best_idx = sku_to_idx[forced_start]
-        best_reach, best_freq = reach_and_freq(X, [best_idx])
 
-    seq.append(best_idx)
-    remaining.remove(best_idx)
-
-    results.append({
-        "step": 1,
-        "sku_added": sku_columns[best_idx],
-        "combination": sku_columns[best_idx],
-        "reach_pct": best_reach,
-        "delta_reach": best_reach - prev_reach,
-        "freq": best_freq,
-        "delta_freq": best_freq - prev_freq
-    })
-
-    prev_reach = best_reach
-    prev_freq = best_freq
-
-    # STEP 2+
-    step = 2
-    while remaining:
-        best_idx = None
-        best_reach = -1
-        best_freq = -1
-        best_inc = -999  # allow zero or negative increments
-
-        for idx in remaining:
-            r, f = reach_and_freq(X, seq + [idx])
-            inc = r - prev_reach
-
-            # PRIORIDAD:
-            # 1) mayor delta alcance
-            # 2) si delta = 0 → mayor frecuencia
-            if inc > best_inc or (inc == best_inc and f > best_freq):
-                best_inc = inc
-                best_idx = idx
-                best_reach = r
-                best_freq = f
-
-        # siempre agrega un SKU, aunque inc sea 0
-        seq.append(best_idx)
-        remaining.remove(best_idx)
-
-        combo_names = [sku_columns[i] for i in seq]
-
-        results.append({
-            "step": step,
-            "sku_added": sku_columns[best_idx],
-            "combination": " + ".join(combo_names),
-            "reach_pct": best_reach,
-            "delta_reach": best_reach - prev_reach,
-            "freq": best_freq,
-            "delta_freq": best_freq - prev_freq
-        })
-
-        prev_reach = best_reach
-        prev_freq = best_freq
-        step += 1
-
-    return results
-
-    """
-    Returns full TURF path:
-    step, sku_added, combination, reach_pct, delta_reach, freq, delta_freq
-    """
-    selected_indices = [sku_to_idx[s] for s in selected_skus]
-    seq = []
-    remaining = selected_indices.copy()
-    results = []
-
-    prev_reach = 0
-    prev_freq = 0
-
-    # STEP 1
-    if forced_start is None:
-        best_idx = None
-        best_reach = -1
-        best_freq = -1
-
-        for idx in remaining:
-            r, f = reach_and_freq(X, [idx])
-            if r > best_reach:
-                best_reach = r
-                best_freq = f
-                best_idx = idx
         start = best_idx
         start_reach = best_reach
         start_freq = best_freq
@@ -197,13 +98,14 @@ def greedy_sequence(X, selected_skus, forced_start=None):
     step = 2
     while remaining:
         best_idx = None
+        best_inc = -1
         best_reach = -1
         best_freq = -1
-        best_inc = -1
 
         for idx in remaining:
             r, f = reach_and_freq(X, seq + [idx])
             inc = r - prev_reach
+
             if inc > best_inc:
                 best_inc = inc
                 best_idx = idx
@@ -232,41 +134,97 @@ def greedy_sequence(X, selected_skus, forced_start=None):
     return results
 
 
-# ---------- FASTAPI ----------
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# ---------- ENDPOINT ----------
+# =====================================================
+# MAIN ENDPOINT
+# =====================================================
 @app.get("/turf")
-def run_turf(skus: str):
+def run_turf(skus: str, project: str, filters: str = None):
     """
     Example:
-    http://127.0.0.1:8000/turf?skus=SKU_1,SKU_5,SKU_7
+    /turf?skus=SKU_1,SKU_3,SKU_5&project=Sabores2025
+    With filters:
+    /turf?skus=SKU_1,SKU_3,SKU_5&project=Sabores2025&filters=Filter_1:Hombre|Filter_2:Mexico
     """
+
+    # -------------------------
+    # Load project sheet
+    # -------------------------
+    try:
+        df = pd.read_excel(data_file, sheet_name=project)
+    except:
+        raise HTTPException(status_code=400, detail=f"Sheet '{project}' not found")
+
+    # -------------------------
+    # Identify SKU columns dynamically
+    # -------------------------
+    sku_columns = [c for c in df.columns if c.startswith("SKU_")]
+    if len(sku_columns) == 0:
+        raise HTTPException(status_code=400, detail="No SKU_ columns found in project")
+
+    # -------------------------
+    # Apply filters if provided
+    # -------------------------
+    if filters:
+        rules = filters.split("|")
+        for rule in rules:
+            if ":" not in rule:
+                continue
+
+            col, val = rule.split(":", 1)
+            col = col.strip()
+            val = val.strip()
+
+            # RULE: if val == ALL → skip
+            if val.upper() == "ALL":
+                continue
+
+            if col not in df.columns:
+                raise HTTPException(status_code=400, detail=f"Filter column '{col}' not found")
+
+            df = df[df[col] == val]
+
+    if df.shape[0] == 0:
+        raise HTTPException(status_code=400, detail="Filter removed all observations")
+
+    # -------------------------
+    # Convert SKUs to matrix
+    # -------------------------
+    X = df[sku_columns].values
+    sku_to_idx = {s: i for i, s in enumerate(sku_columns)}
+
+    # -------------------------
+    # Selected SKUs
+    # -------------------------
     selected_skus = [s.strip() for s in skus.split(",") if s.strip()]
 
-    # OPTIMAL
-    optimal = greedy_sequence(X, selected_skus, forced_start=None)
+    for s in selected_skus:
+        if s not in sku_columns:
+            raise HTTPException(status_code=400, detail=f"SKU '{s}' not found in project")
 
-    # FORCED
+    # -------------------------
+    # Run optimal sequence
+    # -------------------------
+    optimal = greedy_sequence(X, sku_columns, selected_skus, sku_to_idx, forced_start=None)
+
+    # -------------------------
+    # Run forced sequences
+    # -------------------------
     forced = {}
     for s in selected_skus:
-        forced[s] = greedy_sequence(X, selected_skus, forced_start=s)
+        forced[s] = greedy_sequence(X, sku_columns, selected_skus, sku_to_idx, forced_start=s)
 
     return {
+        "project": project,
         "selected_skus": selected_skus,
+        "filters_applied": filters if filters else "NONE",
         "optimal": optimal,
         "forced": forced
     }
 
 
-# ---------- LOCAL RUN ----------
+# =====================================================
+# LOCAL TESTING
+# =====================================================
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
